@@ -6,6 +6,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Contracts\Providers\TextProvider;
+use Laravel\Ai\Responses\Data\ToolApprovalResponse;
 
 class AgentPrompt extends Prompt
 {
@@ -17,6 +18,14 @@ class AgentPrompt extends Prompt
 
     public readonly ?string $invocationId;
 
+    /** @var array<int, ToolApprovalResponse>|null */
+    public readonly ?array $approvalResponses;
+
+    public readonly bool $isResuming;
+
+    /**
+     * @param  array<int, ToolApprovalResponse>|null  $approvalResponses
+     */
     public function __construct(
         Agent $agent,
         string $prompt,
@@ -25,6 +34,8 @@ class AgentPrompt extends Prompt
         string $model,
         ?int $timeout = null,
         ?string $invocationId = null,
+        ?array $approvalResponses = null,
+        bool $isResuming = false,
     ) {
         parent::__construct($prompt, $provider, $model);
 
@@ -32,6 +43,8 @@ class AgentPrompt extends Prompt
         $this->attachments = Collection::make($attachments);
         $this->timeout = $timeout;
         $this->invocationId = $invocationId;
+        $this->approvalResponses = $approvalResponses;
+        $this->isResuming = $isResuming;
     }
 
     /**
@@ -75,6 +88,8 @@ class AgentPrompt extends Prompt
             $this->model,
             $this->timeout,
             $this->invocationId,
+            $this->approvalResponses,
+            $this->isResuming,
         );
     }
 

@@ -10,6 +10,7 @@ use Laravel\Ai\Concerns\RemembersConversations;
 use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Contracts\Conversational;
 use Laravel\Ai\Contracts\ConversationStore;
+use Laravel\Ai\Contracts\Gateway\SupportsToolApproval;
 use Laravel\Ai\Contracts\HasMiddleware;
 use Laravel\Ai\Contracts\HasStructuredOutput;
 use Laravel\Ai\Contracts\HasTools;
@@ -55,12 +56,20 @@ trait GeneratesText
 
                 $messages = [
                     ...($agent instanceof Conversational ? $agent->messages() : []),
-                    new UserMessage($prompt->prompt, $prompt->attachments->all()),
+                    ...($prompt->isResuming ? [] : [new UserMessage($prompt->prompt, $prompt->attachments->all())]),
                 ];
 
                 $this->listenForToolInvocations($invocationId, $agent);
 
                 $schema = $agent instanceof HasStructuredOutput ? $agent->schema(new JsonSchemaTypeFactory) : null;
+
+                $options = TextGenerationOptions::forAgent($agent);
+
+                if ($prompt->isResuming) {
+                    $this->ensureGatewaySupportsToolApproval();
+
+                    $options = $options->resumingWith($prompt->approvalResponses ?? []);
+                }
 
                 $response = $this->textGateway()->generateText(
                     $this,
@@ -69,17 +78,19 @@ trait GeneratesText
                     $messages,
                     $this->resolveTools($agent),
                     $schema,
-                    TextGenerationOptions::forAgent($agent),
+                    $options,
                     $prompt->timeout,
                 );
 
                 return ! empty($schema)
                     ? (new StructuredAgentResponse($invocationId, $response->structured, $response->text, $response->usage, $response->meta))
                         ->withToolCallsAndResults($response->toolCalls, $response->toolResults)
+                        ->withToolApprovalRequests($response->toolApprovalRequests)
                         ->withSteps($response->steps)
                     : (new AgentResponse($invocationId, $response->text, $response->usage, $response->meta))
                         ->withMessages($response->messages)
                         ->withToolCallsAndResults($response->toolCalls, $response->toolResults)
+                        ->withToolApprovalRequests($response->toolApprovalRequests)
                         ->withSteps($response->steps);
             });
 
@@ -159,5 +170,18 @@ trait GeneratesText
                 ));
             },
         );
+    }
+
+    /**
+     * Ensure the resolved gateway supports the tool approval flow.
+     */
+    protected function ensureGatewaySupportsToolApproval(): void
+    {
+        if (! $this->textGateway() instanceof SupportsToolApproval) {
+            throw new \RuntimeException(sprintf(
+                'The [%s] gateway does not support the tool approval flow.',
+                get_class($this->textGateway()),
+            ));
+        }
     }
 }

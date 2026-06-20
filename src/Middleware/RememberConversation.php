@@ -41,12 +41,14 @@ class RememberConversation
                 );
             }
 
-            // Record user message...
-            $this->store->storeUserMessage(
-                $agent->currentConversation(),
-                $agent->conversationParticipant()?->id,
-                $prompt
-            );
+            // Record user message (skipped on resume — the user message already exists)...
+            if (! $prompt->isResuming) {
+                $this->store->storeUserMessage(
+                    $agent->currentConversation(),
+                    $agent->conversationParticipant()?->id,
+                    $prompt
+                );
+            }
 
             // Record assistant message...
             $this->store->storeAssistantMessage(

@@ -7,6 +7,7 @@ use Illuminate\JsonSchema\JsonSchemaTypeFactory;
 use Laravel\Ai\Contracts\Gateway\EmbeddingGateway;
 use Laravel\Ai\Contracts\Gateway\ImageGateway;
 use Laravel\Ai\Contracts\Gateway\StepTextGateway;
+use Laravel\Ai\Contracts\Gateway\SupportsToolApproval;
 use Laravel\Ai\Contracts\Gateway\TextGateway;
 use Laravel\Ai\Contracts\Providers\EmbeddingProvider;
 use Laravel\Ai\Contracts\Providers\ImageProvider;
@@ -32,7 +33,7 @@ use Laravel\Ai\Responses\ImageResponse;
 use Laravel\Ai\Tools\ToolNameResolver;
 use LogicException;
 
-class AzureOpenAiGateway implements EmbeddingGateway, ImageGateway, StepTextGateway, TextGateway
+class AzureOpenAiGateway implements EmbeddingGateway, ImageGateway, StepTextGateway, SupportsToolApproval, TextGateway
 {
     use BuildsTextRequests;
     use CreatesAzureOpenAiClient;

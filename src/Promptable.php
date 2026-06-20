@@ -23,6 +23,7 @@ use Laravel\Ai\Prompts\AgentPrompt;
 use Laravel\Ai\Providers\Provider;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Responses\Data\Meta;
+use Laravel\Ai\Responses\Data\ToolApprovalResponse;
 use Laravel\Ai\Responses\QueuedAgentResponse;
 use Laravel\Ai\Responses\StreamableAgentResponse;
 use Laravel\Ai\Responses\StreamedAgentResponse;
@@ -59,6 +60,26 @@ trait Promptable
         return $this->withModelFailover(
             fn (Provider $provider, string $model) => $provider->prompt(
                 new AgentPrompt($this, $prompt, $attachments, $provider, $model, $this->getTimeout($timeout))
+            ),
+            $provider,
+            $model,
+        );
+    }
+
+    /**
+     * Resume the agent after a tool approval decision and return the response.
+     *
+     * @param  array<int, ToolApprovalResponse>  $approvalResponses
+     */
+    public function resume(
+        array $approvalResponses,
+        Lab|array|string|null $provider = null,
+        ?string $model = null,
+        ?int $timeout = null): AgentResponse
+    {
+        return $this->withModelFailover(
+            fn (Provider $provider, string $model) => $provider->prompt(
+                new AgentPrompt($this, '', [], $provider, $model, $this->getTimeout($timeout), approvalResponses: $approvalResponses, isResuming: true)
             ),
             $provider,
             $model,

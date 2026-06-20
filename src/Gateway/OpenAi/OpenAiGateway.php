@@ -11,6 +11,7 @@ use Laravel\Ai\Contracts\Files\HasName;
 use Laravel\Ai\Contracts\Files\TranscribableAudio;
 use Laravel\Ai\Contracts\Gateway\Gateway;
 use Laravel\Ai\Contracts\Gateway\StepTextGateway;
+use Laravel\Ai\Contracts\Gateway\SupportsToolApproval;
 use Laravel\Ai\Contracts\Providers\AudioProvider;
 use Laravel\Ai\Contracts\Providers\EmbeddingProvider;
 use Laravel\Ai\Contracts\Providers\ImageProvider;
@@ -32,7 +33,7 @@ use Laravel\Ai\Responses\ImageResponse;
 use Laravel\Ai\Responses\TranscriptionResponse;
 use LogicException;
 
-class OpenAiGateway implements Gateway, StepTextGateway
+class OpenAiGateway implements Gateway, StepTextGateway, SupportsToolApproval
 {
     use Concerns\BuildsTextRequests;
     use Concerns\CreatesOpenAiClient;

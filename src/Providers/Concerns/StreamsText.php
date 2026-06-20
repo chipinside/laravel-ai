@@ -49,10 +49,18 @@ trait StreamsText
 
                         $messages = [
                             ...($agent instanceof Conversational ? $agent->messages() : []),
-                            new UserMessage($prompt->prompt, $prompt->attachments->all()),
+                            ...($prompt->isResuming ? [] : [new UserMessage($prompt->prompt, $prompt->attachments->all())]),
                         ];
 
                         $this->listenForToolInvocations($invocationId, $agent);
+
+                        $options = TextGenerationOptions::forAgent($agent);
+
+                        if ($prompt->isResuming) {
+                            $this->ensureGatewaySupportsToolApproval();
+
+                            $options = $options->resumingWith($prompt->approvalResponses ?? []);
+                        }
 
                         yield from $this->textGateway()->streamText(
                             $invocationId,
@@ -62,7 +70,7 @@ trait StreamsText
                             $messages,
                             $this->resolveTools($agent),
                             null,
-                            TextGenerationOptions::forAgent($agent),
+                            $options,
                             $prompt->timeout,
                         );
                     },

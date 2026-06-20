@@ -6,6 +6,7 @@ use Illuminate\Support\Collection;
 use Laravel\Ai\Responses\Data\Meta;
 use Laravel\Ai\Streaming\Events\StreamEnd;
 use Laravel\Ai\Streaming\Events\TextDelta;
+use Laravel\Ai\Streaming\Events\ToolApprovalRequest;
 use Laravel\Ai\Streaming\Events\ToolCall;
 use Laravel\Ai\Streaming\Events\ToolResult;
 
@@ -25,6 +26,10 @@ class StreamedAgentResponse extends AgentResponse
         $this->withToolCallsAndResults(
             toolCalls: $events->whereInstanceOf(ToolCall::class)->map->toolCall,
             toolResults: $events->whereInstanceOf(ToolResult::class)->map->toolResult,
+        );
+
+        $this->withToolApprovalRequests(
+            $events->whereInstanceOf(ToolApprovalRequest::class)->map->approvalRequest,
         );
 
         $this->events = $events;

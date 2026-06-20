@@ -9,6 +9,7 @@ use Laravel\Ai\Attributes\TopP;
 use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Contracts\HasProviderOptions;
 use Laravel\Ai\Enums\Lab;
+use Laravel\Ai\Responses\Data\ToolApprovalResponse;
 use ReflectionClass;
 
 class TextGenerationOptions
@@ -19,8 +20,28 @@ class TextGenerationOptions
         public readonly ?float $temperature = null,
         public readonly ?Agent $agent = null,
         public readonly ?float $topP = null,
+        public readonly ?array $approvalResponses = null,
+        public readonly bool $isResuming = false,
     ) {
         //
+    }
+
+    /**
+     * Create a copy of these options carrying tool approval responses for a resume.
+     *
+     * @param  array<int, ToolApprovalResponse>  $approvalResponses
+     */
+    public function resumingWith(array $approvalResponses): self
+    {
+        return new self(
+            maxSteps: $this->maxSteps,
+            maxTokens: $this->maxTokens,
+            temperature: $this->temperature,
+            agent: $this->agent,
+            topP: $this->topP,
+            approvalResponses: $approvalResponses,
+            isResuming: true,
+        );
     }
 
     /**

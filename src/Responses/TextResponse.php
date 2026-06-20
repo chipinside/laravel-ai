@@ -8,6 +8,7 @@ use Laravel\Ai\Messages\Message;
 use Laravel\Ai\Messages\ToolResultMessage;
 use Laravel\Ai\Responses\Data\Meta;
 use Laravel\Ai\Responses\Data\Step;
+use Laravel\Ai\Responses\Data\ToolApprovalRequest;
 use Laravel\Ai\Responses\Data\ToolCall;
 use Laravel\Ai\Responses\Data\ToolResult;
 use Laravel\Ai\Responses\Data\Usage;
@@ -23,6 +24,9 @@ class TextResponse
     /** @var Collection<int, ToolResult> */
     public Collection $toolResults;
 
+    /** @var Collection<int, ToolApprovalRequest> */
+    public Collection $toolApprovalRequests;
+
     /** @var Collection<int, Step> */
     public Collection $steps;
 
@@ -31,6 +35,7 @@ class TextResponse
         $this->messages = new Collection;
         $this->toolCalls = new Collection;
         $this->toolResults = new Collection;
+        $this->toolApprovalRequests = new Collection;
         $this->steps = new Collection;
     }
 
@@ -88,6 +93,26 @@ class TextResponse
         $this->steps = $steps;
 
         return $this;
+    }
+
+    /**
+     * Provide the tool approval requests awaiting a decision.
+     *
+     * @param  Collection<int, ToolApprovalRequest>  $toolApprovalRequests
+     */
+    public function withToolApprovalRequests(Collection $toolApprovalRequests): self
+    {
+        $this->toolApprovalRequests = $toolApprovalRequests->values();
+
+        return $this;
+    }
+
+    /**
+     * Determine if the response is paused awaiting tool approval.
+     */
+    public function awaitingApproval(): bool
+    {
+        return $this->toolApprovalRequests->isNotEmpty();
     }
 
     /**
