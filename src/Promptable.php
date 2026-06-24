@@ -13,6 +13,7 @@ use Laravel\Ai\Attributes\Provider as ProviderAttribute;
 use Laravel\Ai\Attributes\Timeout as TimeoutAttribute;
 use Laravel\Ai\Attributes\UseCheapestModel;
 use Laravel\Ai\Attributes\UseSmartestModel;
+use Laravel\Ai\Contracts\Providers\TextProvider;
 use Laravel\Ai\Enums\Lab;
 use Laravel\Ai\Events\AgentFailedOver;
 use Laravel\Ai\Exceptions\FailoverableException;
@@ -96,6 +97,48 @@ trait Promptable
         ?string $model = null,
         ?int $timeout = null): StreamableAgentResponse
     {
+        return $this->streamWith(
+            fn (TextProvider $provider, string $model, ?int $timeout, string $invocationId) => new AgentPrompt(
+                $this, $prompt, $attachments, $provider, $model, $timeout, $invocationId,
+            ),
+            $provider,
+            $model,
+            $timeout,
+        );
+    }
+
+    /**
+     * Resume the agent after a tool approval decision and return a streamable response.
+     *
+     * @param  array<int, ToolApprovalResponse>  $approvalResponses
+     */
+    public function streamResume(
+        array $approvalResponses,
+        Lab|array|string|null $provider = null,
+        ?string $model = null,
+        ?int $timeout = null): StreamableAgentResponse
+    {
+        return $this->streamWith(
+            fn (TextProvider $provider, string $model, ?int $timeout, string $invocationId) => new AgentPrompt(
+                $this, '', [], $provider, $model, $timeout, $invocationId, approvalResponses: $approvalResponses, isResuming: true,
+            ),
+            $provider,
+            $model,
+            $timeout,
+        );
+    }
+
+    /**
+     * Stream the agent's response, building each provider's prompt with the given factory.
+     *
+     * @param  Closure(TextProvider, string, ?int, string): AgentPrompt  $makePrompt
+     */
+    private function streamWith(
+        Closure $makePrompt,
+        Lab|array|string|null $provider,
+        ?string $model,
+        ?int $timeout): StreamableAgentResponse
+    {
         $providers = $this->getProvidersAndModelsForFailover($provider, $model);
         $resolvedTimeout = $this->getTimeout($timeout);
 
@@ -105,7 +148,7 @@ trait Promptable
             [$resolved, $resolvedModel] = $this->iterateProvidersWithFailover($providers)->current();
 
             return $resolved->stream(
-                new AgentPrompt($this, $prompt, $attachments, $resolved, $resolvedModel, $resolvedTimeout, $invocationId)
+                $makePrompt($resolved, $resolvedModel, $resolvedTimeout, $invocationId)
             );
         }
 
@@ -114,7 +157,7 @@ trait Promptable
 
         $outer = new StreamableAgentResponse(
             $invocationId,
-            function () use ($providers, $prompt, $attachments, $resolvedTimeout, $invocationId, &$outer) {
+            function () use ($providers, $makePrompt, $resolvedTimeout, $invocationId, &$outer) {
                 $lastException = null;
 
                 foreach ($this->iterateProvidersWithFailover($providers) as [$provider, $model]) {
@@ -122,7 +165,7 @@ trait Promptable
 
                     try {
                         $innerResponse = $provider->stream(
-                            new AgentPrompt($this, $prompt, $attachments, $provider, $model, $resolvedTimeout, $invocationId)
+                            $makePrompt($provider, $model, $resolvedTimeout, $invocationId)
                         );
 
                         $innerResponse->then(fn (StreamedAgentResponse $response) => $outer->adoptStateFrom($response));
