@@ -9,7 +9,6 @@ use Laravel\Ai\Contracts\Gateway\StepTextGateway;
 use Laravel\Ai\Contracts\Providers\TextProvider;
 use Laravel\Ai\Contracts\Tool;
 use Laravel\Ai\Contracts\TransformsApprovalArguments;
-use Laravel\Ai\Exceptions\MissingToolApprovalException;
 use Laravel\Ai\Exceptions\NoSuchToolException;
 use Laravel\Ai\Gateway\Concerns\InvokesTools;
 use Laravel\Ai\Messages\AssistantMessage;
@@ -61,14 +60,23 @@ class TextGenerationLoop
         $approvalRequests = [];
 
         if ($options?->isResuming) {
-            [$pending, $resolved] = $this->resolvePendingApprovals($allMessages, $tools, $options->approvalResponses ?? []);
+            [$pending, $resolved, $remaining] = $this->resolvePendingApprovals($allMessages, $tools, $options->approvalResponses ?? []);
 
             if (filled($resolved)) {
                 $allMessages[] = new ToolResultMessage(collect($resolved));
+            }
 
+            if (filled($resolved) || filled($remaining)) {
                 $steps->push(new Step(
                     '', $pending, $resolved, FinishReason::ToolCalls, new Usage, new Meta($provider->name(), $model),
                 ));
+            }
+
+            // Still awaiting one or more approvals — surface the remaining requests and stop here...
+            if (filled($remaining)) {
+                $approvalRequests = $this->buildApprovalRequests($remaining, $tools);
+
+                return $this->buildFinalResponse($steps, $allMessages, count($messages), null, $approvalRequests);
             }
         }
 
@@ -173,7 +181,7 @@ class TextGenerationLoop
         $sawError = false;
 
         if ($options?->isResuming) {
-            [$pending, $resolved] = $this->resolvePendingApprovals($allMessages, $tools, $options->approvalResponses ?? []);
+            [$pending, $resolved, $remaining] = $this->resolvePendingApprovals($allMessages, $tools, $options->approvalResponses ?? []);
 
             if (filled($resolved)) {
                 $allMessages[] = new ToolResultMessage(collect($resolved));
@@ -187,6 +195,26 @@ class TextGenerationLoop
                         time(),
                     ))->withInvocationId($invocationId);
                 }
+            }
+
+            // Still awaiting one or more approvals — surface the remaining requests and end the stream...
+            if (filled($remaining)) {
+                foreach ($this->buildApprovalRequests($remaining, $tools) as $approvalRequest) {
+                    yield (new ToolApprovalRequestEvent(
+                        strtolower((string) Str::uuid7()),
+                        $approvalRequest,
+                        time(),
+                    ))->withInvocationId($invocationId);
+                }
+
+                yield (new StreamEnd(
+                    strtolower((string) Str::uuid7()),
+                    FinishReason::ToolCalls->value,
+                    $accumulatedUsage,
+                    time(),
+                ))->withInvocationId($invocationId);
+
+                return;
             }
         }
 
@@ -366,41 +394,52 @@ class TextGenerationLoop
     /**
      * Resolve the pending approvals for a resume, executing approved/auto tools and denying the rest.
      *
+     * Tool calls that still have no approval decision are returned as "remaining" so the caller can
+     * keep awaiting them — approvals may be supplied across several resumes, one decision at a time.
+     *
      * @param  Tool[]  $tools
      * @param  array<int, ToolApprovalResponse|array<string, mixed>>  $approvalResponses
-     * @return array{0: ToolCall[], 1: ToolResult[]}
+     * @return array{0: ToolCall[], 1: ToolResult[], 2: ToolCall[]}
      */
     protected function resolvePendingApprovals(array $messages, array $tools, array $approvalResponses): array
     {
         $lastAssistant = $this->lastAssistantMessage($messages);
 
         if ($lastAssistant === null) {
-            return [[], []];
+            return [[], [], []];
         }
 
         $pending = $this->pendingToolCalls($messages, $lastAssistant);
 
         if (empty($pending)) {
-            return [[], []];
+            return [[], [], []];
         }
 
         $responses = $this->indexApprovalResponses($approvalResponses);
 
-        $resolved = array_map(
-            fn (ToolCall $toolCall) => $this->resolveApprovalCall($toolCall, $tools, $responses),
-            $pending,
-        );
+        $resolved = [];
+        $remaining = [];
 
-        return [$pending, $resolved];
+        foreach ($pending as $toolCall) {
+            $result = $this->resolveApprovalCall($toolCall, $tools, $responses);
+
+            if ($result === null) {
+                $remaining[] = $toolCall;
+            } else {
+                $resolved[] = $result;
+            }
+        }
+
+        return [$pending, $resolved, $remaining];
     }
 
     /**
-     * Resolve a single pending tool call into a tool result.
+     * Resolve a single pending tool call into a tool result, or null when it is still awaiting approval.
      *
      * @param  Tool[]  $tools
      * @param  array<string, ToolApprovalResponse>  $responses
      */
-    protected function resolveApprovalCall(ToolCall $toolCall, array $tools, array $responses): ToolResult
+    protected function resolveApprovalCall(ToolCall $toolCall, array $tools, array $responses): ?ToolResult
     {
         $tool = $this->findTool($toolCall->name, $tools);
 
@@ -408,7 +447,7 @@ class TextGenerationLoop
             $decision = $responses[$toolCall->id] ?? null;
 
             if ($decision === null) {
-                throw new MissingToolApprovalException($toolCall->name, $toolCall->id);
+                return null;
             }
 
             if (! $decision->approved) {

@@ -6,7 +6,6 @@ use Laravel\Ai\Contracts\Gateway\StepTextGateway;
 use Laravel\Ai\Contracts\Providers\TextProvider;
 use Laravel\Ai\Contracts\Tool;
 use Laravel\Ai\Contracts\TransformsApprovalArguments;
-use Laravel\Ai\Exceptions\MissingToolApprovalException;
 use Laravel\Ai\Exceptions\NoSuchToolException;
 use Laravel\Ai\Gateway\StepContext;
 use Laravel\Ai\Gateway\StepResponse;
@@ -492,9 +491,9 @@ test('resume is a no-op when there are no pending tool calls', function () {
         ->and($response->toolResults)->toHaveCount(0);
 });
 
-test('resume throws when an approval decision is missing', function () {
+test('resume keeps awaiting when an approval decision is missing', function () {
     $tool = new TextGenerationLoopApprovalTool;
-    $toolCall = new ToolCall('call-1', TextGenerationLoopApprovalTool::class, [], 'call-1');
+    $toolCall = new ToolCall('call-1', TextGenerationLoopApprovalTool::class, ['path' => '/tmp/x'], 'call-1');
 
     $messages = [
         new UserMessage('delete it'),
@@ -503,7 +502,7 @@ test('resume throws when an approval decision is missing', function () {
 
     $gateway = new TextGenerationLoopFakeGateway([]);
 
-    expect(fn () => (new TextGenerationLoop($gateway))->generate(
+    $response = (new TextGenerationLoop($gateway))->generate(
         textGenerationLoopProvider(),
         'model',
         null,
@@ -512,7 +511,72 @@ test('resume throws when an approval decision is missing', function () {
         null,
         (new TextGenerationOptions(maxSteps: 3))->resumingWith([]),
         null,
-    ))->toThrow(MissingToolApprovalException::class);
+    );
+
+    expect($gateway->generateCalls)->toBe(0)
+        ->and($tool->calls)->toBe(0)
+        ->and($response->awaitingApproval())->toBeTrue()
+        ->and($response->toolApprovalRequests)->toHaveCount(1)
+        ->and($response->toolApprovalRequests->first()->toolCallId)->toBe('call-1')
+        ->and($response->toolResults)->toHaveCount(0);
+});
+
+test('resume accumulates approvals supplied one decision at a time', function () {
+    $tool = new TextGenerationLoopApprovalTool;
+    $first = new ToolCall('call-1', TextGenerationLoopApprovalTool::class, ['path' => '/a'], 'call-1');
+    $second = new ToolCall('call-2', TextGenerationLoopApprovalTool::class, ['path' => '/b'], 'call-2');
+
+    $messages = [
+        new UserMessage('do both'),
+        new AssistantMessage('', collect([$first, $second])),
+    ];
+
+    // First resume approves only call-1: it executes, but the loop keeps awaiting call-2...
+    $gateway = new TextGenerationLoopFakeGateway([
+        new StepResponse(text: 'Done', toolCalls: [], finishReason: FinishReason::Stop, usage: new Usage(5, 2), meta: new Meta('fake', 'model')),
+    ]);
+
+    $loop = new TextGenerationLoop($gateway);
+
+    $partial = $loop->generate(
+        textGenerationLoopProvider(),
+        'model',
+        null,
+        $messages,
+        [$tool],
+        null,
+        (new TextGenerationOptions(maxSteps: 3))->resumingWith([new ToolApprovalResponse('call-1', approved: true)]),
+        null,
+    );
+
+    expect($gateway->generateCalls)->toBe(0)
+        ->and($tool->calls)->toBe(1)
+        ->and($partial->awaitingApproval())->toBeTrue()
+        ->and($partial->toolApprovalRequests)->toHaveCount(1)
+        ->and($partial->toolApprovalRequests->first()->toolCallId)->toBe('call-2')
+        ->and($partial->toolResults)->toHaveCount(1)
+        ->and($partial->toolResults->first()->id)->toBe('call-1');
+
+    // The caller persists the partial results, then resumes again to approve call-2...
+    $resumedMessages = [...$messages, ...$partial->messages->all()];
+
+    $second = $loop->generate(
+        textGenerationLoopProvider(),
+        'model',
+        null,
+        $resumedMessages,
+        [$tool],
+        null,
+        (new TextGenerationOptions(maxSteps: 3))->resumingWith([new ToolApprovalResponse('call-2', approved: true)]),
+        null,
+    );
+
+    expect($gateway->generateCalls)->toBe(1)
+        ->and($tool->calls)->toBe(2)
+        ->and($second->awaitingApproval())->toBeFalse()
+        ->and($second->text)->toBe('Done')
+        ->and($second->toolResults)->toHaveCount(1)
+        ->and($second->toolResults->first()->id)->toBe('call-2');
 });
 
 test('streaming pauses with a tool approval request event', function () {
@@ -585,6 +649,45 @@ test('streaming resume emits resolved tool results', function () {
         ->and($toolResultEvents->first()->toolResult->result)->toBe('counted')
         ->and($streamEnds)->toHaveCount(1)
         ->and($streamEnds->first()->reason)->toBe(FinishReason::Stop->value);
+});
+
+test('streaming resume keeps awaiting the remaining approvals', function () {
+    $tool = new TextGenerationLoopApprovalTool;
+    $first = new ToolCall('call-1', TextGenerationLoopApprovalTool::class, ['path' => '/a'], 'call-1');
+    $second = new ToolCall('call-2', TextGenerationLoopApprovalTool::class, ['path' => '/b'], 'call-2');
+
+    $messages = [
+        new UserMessage('do both'),
+        new AssistantMessage('', collect([$first, $second])),
+    ];
+
+    // No model step should run while an approval is still outstanding...
+    $gateway = new TextGenerationLoopFakeGateway(streams: []);
+
+    $events = iterator_to_array((new TextGenerationLoop($gateway))->stream(
+        'invocation-1',
+        textGenerationLoopProvider(),
+        'model',
+        null,
+        $messages,
+        [$tool],
+        null,
+        (new TextGenerationOptions(maxSteps: 3))->resumingWith([new ToolApprovalResponse('call-1', approved: true)]),
+        null,
+    ));
+
+    $toolResultEvents = collect($events)->whereInstanceOf(ToolResultEvent::class);
+    $approvalEvents = collect($events)->whereInstanceOf(ToolApprovalRequestEvent::class);
+    $streamEnds = collect($events)->whereInstanceOf(StreamEnd::class);
+
+    expect($gateway->streamCalls)->toBe(0)
+        ->and($tool->calls)->toBe(1)
+        ->and($toolResultEvents)->toHaveCount(1)
+        ->and($toolResultEvents->first()->toolResult->id)->toBe('call-1')
+        ->and($approvalEvents)->toHaveCount(1)
+        ->and($approvalEvents->first()->approvalRequest->toolCallId)->toBe('call-2')
+        ->and($streamEnds)->toHaveCount(1)
+        ->and($streamEnds->first()->reason)->toBe(FinishReason::ToolCalls->value);
 });
 
 function textGenerationLoopProvider(): TextProvider
